@@ -1,0 +1,12 @@
+{
+  "name": "js-pass-parser",
+  "module": "index.ts",
+  "type": "module",
+  "devDependencies": {
+    "bun-types": "^0.6.7"
+
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
