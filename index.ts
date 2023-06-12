@@ -1,27 +1,16 @@
 import { createReadStream } from "node:fs";
 import { writeFile } from "node:fs/promises";
-import readline from "readline";
-import { HASHES_LATEX } from "./latex";
 import { stringify } from "csv";
-import { TERM_COLOURS } from "./constants";
 import chalk from "chalk";
+import readline from "readline";
+
+import { HASHES_LATEX } from "./latex";
+import { HashStat, Stats, WriteCsvOpts } from "./types";
 
 const rl = readline.createInterface({
   input: createReadStream("example.txt"),
   crlfDelay: Infinity,
 });
-
-interface Stats {
-  indexedHashes: Record<string, string[]>;
-  hashes: number;
-  enabledAccounts: number;
-  disabledAccounts: number;
-  computerAccounts: number;
-  blankPasswords: number;
-  domains: string[];
-  lmHashes: string[][];
-  mergedHashes: any[];
-}
 
 const stats: Stats = {
   indexedHashes: {} as Record<string, string[]>,
@@ -32,12 +21,10 @@ const stats: Stats = {
   blankPasswords: 0,
   domains: [],
   lmHashes: [],
-  mergedHashes: [],
+  hashStat: [],
 };
 
-const duplicatedHashes = {};
 const duplicatedAdmins = [];
-const ntlmCsvRecords: string[][] = [];
 
 const addToStats = (pl: any) => {
   pl.enabled && stats.enabledAccounts++;
@@ -59,37 +46,31 @@ const addToStats = (pl: any) => {
     stats.lmHashes.push([pl.lm, pl.user]);
 };
 
-rl.on("line", (line) => {
+const processLine = (line: string) => {
   const pl = parseLine(line);
-
   stats.hashes++;
-
   addToStats(pl);
-});
+};
 
-rl.on("close", () => {
-  //When done we can pass the data out to a function and not do everything in this.
+rl.on("line", processLine);
+
+const onClose = () => {
   stats.disabledAccounts = stats.hashes - stats.enabledAccounts;
 
-  const mergedHashes = Object.entries(stats.indexedHashes)
-    .map(([key, value]) => ({ count: value.length, hash: key, users: value }))
-    .sort((a, b) => (a.count > b.count ? 1 : -1));
+  const { duplicatedHashes, latexString, ntlmCsvRecords } =
+    generateReport(stats);
 
-  const latexLines: string[] = [];
-
-  mergedHashes.forEach((mh) => {
-    if (mh.count > 1) {
-      duplicatedHashes[mh.hash] = mh;
-      ntlmCsvRecords.push([mh.count.toString(), mh.hash, mh.users.join(" - ")]);
-      const masked = mh.hash.slice(0, 4) + "*".repeat(14) + mh.hash.slice(28);
-      latexLines.push(`\t\t ${masked} & ${mh.count} \\\\\n`);
-    }
+  writeCSV({
+    filename: "lm_hashes.csv",
+    columns: ["hash", "user"],
+    records: stats.lmHashes,
   });
 
-  const latexString = HASHES_LATEX.replace(
-    "%REPLACE_ME%",
-    latexLines.join("").trim()
-  );
+  writeCSV({
+    filename: "duplicate_hashes.csv",
+    columns: ["Count", "Hash", "Users"],
+    records: ntlmCsvRecords,
+  });
 
   writeFile(
     "latex_table.txt",
@@ -97,64 +78,99 @@ rl.on("close", () => {
     (err: Error) => err ?? console.error("Error Writing File", err)
   );
 
-  const columns = ["Count", "Hash", "Users"];
+  printData({ ...stats, totalDupHashes: Object.keys(duplicatedHashes).length });
+};
 
-  writeFile(
-    "lm_hashes.csv",
-    stats.lmHashes.join(","),
-    (err: Error) => err ?? console.error("Error Writing File", err)
+rl.on("close", onClose);
+
+type DuplicatedHashes = Record<string, HashStat>;
+
+const generateReport = (stats: Stats) => {
+  const latexLines: string[] = [];
+  const ntlmCsvRecords: string[][] = [];
+  const duplicatedHashes: DuplicatedHashes = {};
+
+  Object.entries(stats.indexedHashes)
+    .map(([key, value]) => ({ count: value.length, hash: key, users: value }))
+    .sort((a, b) => (a.count > b.count ? 1 : -1))
+    .reduce(
+      (acc, curr) => {
+        if (curr.count > 1) {
+          acc.duplicatedHashes[curr.hash] = curr;
+          acc.ntlmCsvRecords.push([
+            curr.count.toString(),
+            curr.hash,
+            curr.users.join(" - "),
+          ]);
+          const masked =
+            curr.hash.slice(0, 4) + "*".repeat(14) + curr.hash.slice(28);
+          acc.latexLines.push(`\t\t ${masked} & ${curr.count} \\\\\n`);
+        }
+        return acc;
+      },
+      { duplicatedHashes, ntlmCsvRecords, latexLines }
+    );
+
+  const latexString = HASHES_LATEX.replace(
+    "%REPLACE_ME%",
+    latexLines.join("").trim()
   );
 
-  stringify(ntlmCsvRecords, { header: true, columns }, (err, output) => {
+  return {
+    duplicatedHashes,
+    ntlmCsvRecords,
+    latexString,
+  };
+};
+
+const writeCSV = ({ records, columns, filename }: WriteCsvOpts) =>
+  stringify(records, { header: true, columns }, (err, output) => {
     if (err) throw err;
     writeFile(
-      "duplicate_hashes.csv",
+      filename,
       output,
       (err: Error) => err ?? console.error("Error Writing File", err)
     );
   });
 
-  function printData(stats: Stats) {
-    // finish printing stats
-    const red = chalk.bold.red;
-    const green = chalk.bold.green;
-    const yellow = chalk.bold.yellow;
+const printData = (stats: Stats & { totalDupHashes: number }) => {
+  // finish printing stats
+  const red = chalk.bold.red;
+  const green = chalk.bold.green;
+  const yellow = chalk.bold.yellow;
 
-    console.log("Total Hashes:\t\t", stats.hashes);
-    console.log("Enabled Accounts:\t", stats.enabledAccounts);
-    console.log("Disabled Accounts:\t", stats.disabledAccounts);
-    console.log("Computer Accounts:\t", stats.computerAccounts);
+  console.log("Total Hashes:\t\t", stats.hashes);
+  console.log("Enabled Accounts:\t", stats.enabledAccounts);
+  console.log("Disabled Accounts:\t", stats.disabledAccounts);
+  console.log("Computer Accounts:\t", stats.computerAccounts);
 
-    console.log(
-      (stats.lmHashes.length > 0 ? red : green)(
-        `LM Hashes:\t\t`,
-        stats.lmHashes.length
-      )
-    );
+  console.log(
+    (stats.lmHashes.length > 0 ? red : green)(
+      `LM Hashes:\t\t`,
+      stats.lmHashes.length
+    )
+  );
 
-    console.log(
-      (stats.blankPasswords > 0 ? red : green)(
-        `Blank Passwords:\t`,
-        stats.blankPasswords
-      )
-    );
+  console.log(
+    (stats.blankPasswords > 0 ? red : green)(
+      `Blank Passwords:\t`,
+      stats.blankPasswords
+    )
+  );
 
-    console.log(
-      (stats.blankPasswords > 0 ? red : green)(
-        `Duplicated Hashes:\t`,
-        stats.domains
-      )
-    );
+  console.log(
+    (stats.totalDupHashes > 0 ? red : green)(
+      `Duplicated Hashes:\t`,
+      stats.totalDupHashes
+    )
+  );
 
-    console.log(
-      (stats.blankPasswords > 0 ? red : green)(`Domains:\t\t`, stats.domains)
-    );
-    console.log(yellow("\nLatex Table output to latex_table.txt"));
-    console.log(yellow("CSV output to duplicated_hashes.txt"));
-  }
-
-  printData(stats);
-});
+  console.log(
+    (stats.blankPasswords > 0 ? red : green)(`Domains:\t\t`, stats.domains)
+  );
+  console.log(yellow("\nLatex Table output to latex_table.txt"));
+  console.log(yellow("CSV output to duplicated_hashes.txt"));
+};
 
 function parseLine(line: string) {
   if (!line || !line.includes(":")) {
