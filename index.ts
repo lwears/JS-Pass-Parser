@@ -1,19 +1,30 @@
-import { createReadStream } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { createReadStream, readFileSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { stringify } from "csv";
 import chalk from "chalk";
 import readline from "readline";
+import yargs from "yargs-parser";
 
 import { HASHES_LATEX } from "./latex";
-import { DuplicatedHashes, IndexedHashes, Stats, WriteCsvOpts } from "./types";
+import {
+  DuplicatedHashes,
+  Hash,
+  IndexedHashes,
+  Stats,
+  WriteCsvOpts,
+} from "./types";
+import { BLANK_LM, BLANK_NTLM } from "./constants";
 
-const rl = readline.createInterface({
-  input: createReadStream("example.txt"),
-  crlfDelay: Infinity,
-});
+const rawArgs = Bun.argv.slice(3);
+
+const args = yargs(rawArgs);
+
+const secretsFile = args._[0];
+
+const adminsFile = args._[1];
 
 const stats: Stats = {
-  indexedHashes: {} as Record<string, string[]>,
+  indexedHashes: {} as IndexedHashes,
   hashes: 0,
   enabledAccounts: 0,
   disabledAccounts: 0,
@@ -22,44 +33,81 @@ const stats: Stats = {
   domains: [],
   lmHashes: [],
   hashStat: [],
+  admins: {},
 };
 
-const duplicatedAdmins = [];
+// Read Admins file and pass into var
+const admins = readline.createInterface({
+  input: createReadStream(adminsFile as string),
+  crlfDelay: Infinity,
+});
 
-const addToStats = (pl: any) => {
-  pl.enabled && stats.enabledAccounts++;
+admins.on("line", (line: string) => {
+  const admin = line.trim().toLowerCase();
+  if (admin in stats.admins) {
+    return;
+  }
+  stats.admins[admin] = "";
+});
 
-  pl.isComputer && stats.computerAccounts++;
+// Read secrets dump
+const secretsDump = readline.createInterface({
+  input: createReadStream(secretsFile as string),
+  crlfDelay: Infinity,
+});
 
-  pl.ntlm.includes("31d6cfe0d16ae931b73c59d7e0c089c0") &&
-    stats.blankPasswords++;
+secretsDump.on("line", processLine);
 
-  pl.domain &&
-    !stats.domains.includes(pl.domain) &&
-    stats.domains.push(pl.domain);
+secretsDump.on("close", onClose);
 
-  Array.isArray(stats.indexedHashes[pl.ntlm])
-    ? stats.indexedHashes[pl.ntlm].push(pl.user)
-    : (stats.indexedHashes[pl.ntlm] = [pl.user]);
+function addToStats(hash: Hash) {
+  hash.enabled && stats.enabledAccounts++;
 
-  !pl.lm.includes("aad3b435b51404eeaad3b435b51404ee") &&
-    stats.lmHashes.push([pl.lm, pl.user]);
-};
+  hash.isComputer && stats.computerAccounts++;
 
-const processLine = (line: string) => {
+  if (args.all) return;
+
+  hash.ntlm.includes(BLANK_NTLM) && stats.blankPasswords++;
+
+  hash.domain &&
+    !stats.domains.includes(hash.domain) &&
+    stats.domains.push(hash.domain);
+
+  Array.isArray(stats.indexedHashes[hash.ntlm])
+    ? stats.indexedHashes[hash.ntlm].push(hash.user)
+    : (stats.indexedHashes[hash.ntlm] = [hash.user]);
+
+  // Not adding the last admins ntlm
+  if (hash.user in stats.admins) {
+    stats.admins[hash.user] = hash.ntlm;
+  }
+
+  !hash.lm.includes(BLANK_LM) && stats.lmHashes.push([hash.lm, hash.user]);
+}
+
+function processLine(line: string) {
   const pl = parseLine(line);
   stats.hashes++;
   addToStats(pl);
-};
+}
 
-rl.on("line", processLine);
-
-const onClose = () => {
+function onClose() {
   stats.disabledAccounts = stats.hashes - stats.enabledAccounts;
 
-  const { duplicatedHashes, latexLines, ntlmCsvRecords } = generateReport(
+  const { duplicatedHashes, latexLines, ntlmCsvRecords } = mapIndexedHashes(
     stats.indexedHashes
   );
+
+  console.log(stats.admins);
+
+  const duplicatedAdmins = Object.entries(stats.admins).map(([admin, hash]) => {
+    console.log(admin, hash);
+    if (hash in duplicatedHashes) {
+      return admin;
+    }
+  });
+
+  console.log(duplicatedAdmins);
 
   writeCSV({
     filename: "lm_hashes.csv",
@@ -80,9 +128,7 @@ const onClose = () => {
   );
 
   printData({ ...stats, totalDupHashes: Object.keys(duplicatedHashes).length });
-};
-
-rl.on("close", onClose);
+}
 
 type ReduceReturnType = {
   latexLines: string[];
@@ -90,7 +136,7 @@ type ReduceReturnType = {
   duplicatedHashes: DuplicatedHashes;
 };
 
-const generateReport = (indexedHashes: IndexedHashes) =>
+const mapIndexedHashes = (indexedHashes: IndexedHashes) =>
   Object.entries(indexedHashes)
     .map(([key, value]) => ({ count: value.length, hash: key, users: value }))
     .sort((a, b) => (a.count > b.count ? 1 : -1))
@@ -135,7 +181,7 @@ const printData = (stats: Stats & { totalDupHashes: number }) => {
 
   console.log(
     (stats.lmHashes.length > 0 ? red : green)(
-      `LM Hashes:\t\t`,
+      `\nLM Hashes:\t\t`,
       stats.lmHashes.length
     )
   );
@@ -154,14 +200,12 @@ const printData = (stats: Stats & { totalDupHashes: number }) => {
     )
   );
 
-  console.log(
-    (stats.blankPasswords > 0 ? red : green)(`Domains:\t\t`, stats.domains)
-  );
+  console.log(`Domains:\t\t`, stats.domains);
   console.log(yellow("\nLatex Table output to latex_table.txt"));
   console.log(yellow("CSV output to duplicated_hashes.txt"));
 };
 
-function parseLine(line: string) {
+function parseLine(line: string): Hash {
   if (!line || !line.includes(":")) {
     console.error(`Line blank or incorrect format: ${line}`);
   }

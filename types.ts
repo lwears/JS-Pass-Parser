@@ -10,6 +10,7 @@ export interface Stats {
   domains: string[];
   lmHashes: string[][];
   hashStat: HashStat[];
+  admins: Record<string, string>;
 }
 
 export interface HashStat {
@@ -19,11 +20,12 @@ export interface HashStat {
 }
 
 export interface Hash {
-  domain: string;
+  domain: string | null;
   user: string;
   lm: string;
   ntlm: string;
   enabled: boolean;
+  isComputer: boolean;
 }
 
 export interface WriteCsvOpts {
