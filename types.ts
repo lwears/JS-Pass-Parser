@@ -1,5 +1,7 @@
+export type IndexedHashes = Record<string, string[]>;
+
 export interface Stats {
-  indexedHashes: Record<string, string[]>;
+  indexedHashes: IndexedHashes;
   hashes: number;
   enabledAccounts: number;
   disabledAccounts: number;
@@ -29,3 +31,5 @@ export interface WriteCsvOpts {
   columns: string[];
   filename: string;
 }
+
+export type DuplicatedHashes = Record<string, HashStat>;

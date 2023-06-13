@@ -5,7 +5,7 @@ import chalk from "chalk";
 import readline from "readline";
 
 import { HASHES_LATEX } from "./latex";
-import { HashStat, Stats, WriteCsvOpts } from "./types";
+import { DuplicatedHashes, IndexedHashes, Stats, WriteCsvOpts } from "./types";
 
 const rl = readline.createInterface({
   input: createReadStream("example.txt"),
@@ -57,8 +57,9 @@ rl.on("line", processLine);
 const onClose = () => {
   stats.disabledAccounts = stats.hashes - stats.enabledAccounts;
 
-  const { duplicatedHashes, latexString, ntlmCsvRecords } =
-    generateReport(stats);
+  const { duplicatedHashes, latexLines, ntlmCsvRecords } = generateReport(
+    stats.indexedHashes
+  );
 
   writeCSV({
     filename: "lm_hashes.csv",
@@ -74,7 +75,7 @@ const onClose = () => {
 
   writeFile(
     "latex_table.txt",
-    latexString,
+    HASHES_LATEX.replace("%REPLACE_ME%", latexLines.join("").trim()),
     (err: Error) => err ?? console.error("Error Writing File", err)
   );
 
@@ -83,17 +84,19 @@ const onClose = () => {
 
 rl.on("close", onClose);
 
-type DuplicatedHashes = Record<string, HashStat>;
+const generateReport = (indexedHashes: IndexedHashes) => {
+  type ReduceReturnType = {
+    latexLines: string[];
+    ntlmCsvRecords: string[][];
+    duplicatedHashes: DuplicatedHashes;
+  };
 
-const generateReport = (stats: Stats) => {
-  const latexLines: string[] = [];
-  const ntlmCsvRecords: string[][] = [];
-  const duplicatedHashes: DuplicatedHashes = {};
-
-  Object.entries(stats.indexedHashes)
+  const { duplicatedHashes, latexLines, ntlmCsvRecords } = Object.entries(
+    indexedHashes
+  )
     .map(([key, value]) => ({ count: value.length, hash: key, users: value }))
     .sort((a, b) => (a.count > b.count ? 1 : -1))
-    .reduce(
+    .reduce<ReduceReturnType>(
       (acc, curr) => {
         if (curr.count > 1) {
           acc.duplicatedHashes[curr.hash] = curr;
@@ -108,18 +111,13 @@ const generateReport = (stats: Stats) => {
         }
         return acc;
       },
-      { duplicatedHashes, ntlmCsvRecords, latexLines }
+      { duplicatedHashes: {}, ntlmCsvRecords: [], latexLines: [] }
     );
-
-  const latexString = HASHES_LATEX.replace(
-    "%REPLACE_ME%",
-    latexLines.join("").trim()
-  );
 
   return {
     duplicatedHashes,
     ntlmCsvRecords,
-    latexString,
+    latexLines,
   };
 };
 
