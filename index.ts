@@ -84,16 +84,14 @@ const onClose = () => {
 
 rl.on("close", onClose);
 
-const generateReport = (indexedHashes: IndexedHashes) => {
-  type ReduceReturnType = {
-    latexLines: string[];
-    ntlmCsvRecords: string[][];
-    duplicatedHashes: DuplicatedHashes;
-  };
+type ReduceReturnType = {
+  latexLines: string[];
+  ntlmCsvRecords: string[][];
+  duplicatedHashes: DuplicatedHashes;
+};
 
-  const { duplicatedHashes, latexLines, ntlmCsvRecords } = Object.entries(
-    indexedHashes
-  )
+const generateReport = (indexedHashes: IndexedHashes) =>
+  Object.entries(indexedHashes)
     .map(([key, value]) => ({ count: value.length, hash: key, users: value }))
     .sort((a, b) => (a.count > b.count ? 1 : -1))
     .reduce<ReduceReturnType>(
@@ -113,13 +111,6 @@ const generateReport = (indexedHashes: IndexedHashes) => {
       },
       { duplicatedHashes: {}, ntlmCsvRecords: [], latexLines: [] }
     );
-
-  return {
-    duplicatedHashes,
-    ntlmCsvRecords,
-    latexLines,
-  };
-};
 
 const writeCSV = ({ records, columns, filename }: WriteCsvOpts) =>
   stringify(records, { header: true, columns }, (err, output) => {
