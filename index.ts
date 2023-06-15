@@ -1,5 +1,5 @@
 import { createReadStream, readFileSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { stringify } from "csv";
 import chalk from "chalk";
 import readline from "readline";
@@ -36,19 +36,14 @@ const stats: Stats = {
   admins: {},
 };
 
-// Read Admins file and pass into var
-const admins = readline.createInterface({
-  input: createReadStream(adminsFile as string),
-  crlfDelay: Infinity,
-});
-
-admins.on("line", (line: string) => {
-  const admin = line.trim().toLowerCase();
-  if (admin in stats.admins) {
-    return;
-  }
-  stats.admins[admin] = "";
-});
+// Admins need to be read first and won't ever be as big as secretsFile: safe to read into memory
+let admins: string[] = [];
+if (adminsFile) {
+  admins = readFileSync(adminsFile, { encoding: "utf-8" })
+    .trim()
+    .toLowerCase()
+    .split("\n");
+}
 
 // Read secrets dump
 const secretsDump = readline.createInterface({
@@ -56,16 +51,51 @@ const secretsDump = readline.createInterface({
   crlfDelay: Infinity,
 });
 
-secretsDump.on("line", processLine);
+secretsDump.on("line", processHashLine);
 
 secretsDump.on("close", onClose);
 
+// Functions
+
+function processHashLine(line: string) {
+  const hl = parseHashLine(line);
+  addToStats(hl);
+}
+
+function parseHashLine(line: string): Hash {
+  if (!line || !line.includes(":")) {
+    console.error(`Line blank or incorrect format: ${line}`);
+  }
+
+  const s = line.split(":");
+
+  if (s.length < 7 || s[3].length !== 32) {
+    console.error(`Error reading line: ${line}`);
+  }
+
+  const upn = s[0].split("\\");
+  const domain = upn.length > 1 ? upn[0].toLowerCase() : null;
+  const user = (upn.length > 1 ? upn[1] : upn[0]).toLowerCase();
+
+  return {
+    lm: s[2],
+    ntlm: s[3],
+    enabled: s[6].includes("Enabled"),
+    domain,
+    user,
+    isComputer: user.includes("$"),
+    isAdmin: admins.includes(user) ?? false,
+  };
+}
+
 function addToStats(hash: Hash) {
-  hash.enabled && stats.enabledAccounts++;
+  stats.hashes++;
+
+  hash.enabled ? stats.enabledAccounts++ : stats.disabledAccounts++;
 
   hash.isComputer && stats.computerAccounts++;
 
-  if (args.all) return;
+  if (!args.all && !hash.enabled) return;
 
   hash.ntlm.includes(BLANK_NTLM) && stats.blankPasswords++;
 
@@ -77,37 +107,25 @@ function addToStats(hash: Hash) {
     ? stats.indexedHashes[hash.ntlm].push(hash.user)
     : (stats.indexedHashes[hash.ntlm] = [hash.user]);
 
-  // Not adding the last admins ntlm
-  if (hash.user in stats.admins) {
-    stats.admins[hash.user] = hash.ntlm;
-  }
-
   !hash.lm.includes(BLANK_LM) && stats.lmHashes.push([hash.lm, hash.user]);
-}
 
-function processLine(line: string) {
-  const pl = parseLine(line);
-  stats.hashes++;
-  addToStats(pl);
+  if (hash.isAdmin) stats.admins[hash.user] = hash.ntlm;
 }
 
 function onClose() {
-  stats.disabledAccounts = stats.hashes - stats.enabledAccounts;
-
   const { duplicatedHashes, latexLines, ntlmCsvRecords } = mapIndexedHashes(
     stats.indexedHashes
   );
 
-  console.log(stats.admins);
-
-  const duplicatedAdmins = Object.entries(stats.admins).map(([admin, hash]) => {
-    console.log(admin, hash);
-    if (hash in duplicatedHashes) {
-      return admin;
-    }
-  });
-
-  console.log(duplicatedAdmins);
+  const duplicatedAdmins = Object.entries(stats.admins).reduce<string[]>(
+    (acc, [admin, hash]) => {
+      if (hash in duplicatedHashes) {
+        acc.push(admin);
+      }
+      return acc;
+    },
+    []
+  );
 
   writeCSV({
     filename: "lm_hashes.csv",
@@ -127,9 +145,14 @@ function onClose() {
     (err: Error) => err ?? console.error("Error Writing File", err)
   );
 
-  printData({ ...stats, totalDupHashes: Object.keys(duplicatedHashes).length });
+  printData({
+    ...stats,
+    totalDupHashes: Object.keys(duplicatedHashes).length,
+    duplicatedAdmins,
+  });
 }
 
+// Need Better Name
 type ReduceReturnType = {
   latexLines: string[];
   ntlmCsvRecords: string[][];
@@ -168,8 +191,9 @@ const writeCSV = ({ records, columns, filename }: WriteCsvOpts) =>
     );
   });
 
-const printData = (stats: Stats & { totalDupHashes: number }) => {
-  // finish printing stats
+const printData = (
+  stats: Stats & { totalDupHashes: number; duplicatedAdmins: string[] }
+) => {
   const red = chalk.bold.red;
   const green = chalk.bold.green;
   const yellow = chalk.bold.yellow;
@@ -200,32 +224,14 @@ const printData = (stats: Stats & { totalDupHashes: number }) => {
     )
   );
 
-  console.log(`Domains:\t\t`, stats.domains);
+  console.log(
+    (stats.duplicatedAdmins.length > 0 ? red : green)(
+      `Included Admins:\t`,
+      stats.duplicatedAdmins
+    )
+  );
+
+  console.log(`\nDomains:\t\t`, stats.domains);
   console.log(yellow("\nLatex Table output to latex_table.txt"));
   console.log(yellow("CSV output to duplicated_hashes.txt"));
 };
-
-function parseLine(line: string): Hash {
-  if (!line || !line.includes(":")) {
-    console.error(`Line blank or incorrect format: ${line}`);
-  }
-
-  const s = line.split(":");
-
-  if (s.length < 7 || s[3].length !== 32) {
-    console.error(`Error reading line: ${line}`);
-  }
-
-  const upn = s[0].split("\\");
-  const domain = upn.length > 1 ? upn[0].toLowerCase() : null;
-  const user = (upn.length > 1 ? upn[1] : upn[0]).toLowerCase();
-
-  return {
-    lm: s[2],
-    ntlm: s[3],
-    enabled: s[6].includes("Enabled"),
-    domain,
-    user,
-    isComputer: user.includes("$"),
-  };
-}

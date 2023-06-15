@@ -26,6 +26,7 @@ export interface Hash {
   ntlm: string;
   enabled: boolean;
   isComputer: boolean;
+  isAdmin: boolean;
 }
 
 export interface WriteCsvOpts {
