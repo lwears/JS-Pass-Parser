@@ -1,5 +1,6 @@
 # JS-Pass-Parser
 TypeScript / JavaScript Password Parser for output AFTER first parsing with impackets secretsdump.
+
 Copy of Go-Pass-Parser
 
 To install dependencies:
@@ -81,5 +82,6 @@ CSV output to duplicated_hashes.txt
 ## Todo
 
 Refactor
+
 User better naming
 
