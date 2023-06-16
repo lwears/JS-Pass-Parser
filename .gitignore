@@ -167,3 +167,7 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.\*
+
+latex_table.txt
+duplicate_hashes.csv
+lm_hashes.csv
