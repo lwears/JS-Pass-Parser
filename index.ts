@@ -6,14 +6,7 @@ import readline from "readline";
 import yargs from "yargs-parser";
 
 import { HASHES_LATEX } from "./latex";
-import {
-  BuiltStats,
-  DuplicatedHashes,
-  Hash,
-  IndexedHashes,
-  Stats,
-  WriteCsvOpts,
-} from "./types";
+import { BuiltStats, Hash, IndexedHashes, Stats, WriteCsvOpts } from "./types";
 import { BLANK_LM, BLANK_NTLM } from "./constants";
 import { maskHash } from "./helpers";
 
@@ -120,12 +113,8 @@ function onClose() {
   );
 
   const duplicatedAdmins = Object.entries(stats.admins).reduce<string[]>(
-    (acc, [admin, hash]) => {
-      if (hash in duplicatedHashes) {
-        acc.push(admin);
-      }
-      return acc;
-    },
+    (acc, [admin, hash]) =>
+      hash in duplicatedHashes ? acc.concat(admin) : acc,
     []
   );
 
