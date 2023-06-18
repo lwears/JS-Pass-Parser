@@ -7,6 +7,7 @@ import yargs from "yargs-parser";
 
 import { HASHES_LATEX } from "./latex";
 import {
+  BuiltStats,
   DuplicatedHashes,
   Hash,
   IndexedHashes,
@@ -14,6 +15,7 @@ import {
   WriteCsvOpts,
 } from "./types";
 import { BLANK_LM, BLANK_NTLM } from "./constants";
+import { maskHash } from "./helpers";
 
 const rawArgs = Bun.argv.slice(3);
 
@@ -36,7 +38,7 @@ const stats: Stats = {
   admins: {},
 };
 
-// Admins need to be read first and won't ever be as big as secretsFile: safe to read into memory
+// admins is optional but needs to be read first and won't ever be as big as secretsFile: safe to read into memory
 let admins: string[] = [];
 if (adminsFile) {
   admins = readFileSync(adminsFile, { encoding: "utf-8" })
@@ -70,7 +72,7 @@ function parseHashLine(line: string): Hash {
   const s = line.split(":");
 
   if (s.length < 7 || s[3].length !== 32) {
-    console.error(`Error reading line: ${line}`);
+    console.error(`Error malformed line: ${line}`);
   }
 
   const upn = s[0].split("\\");
@@ -113,7 +115,7 @@ function addToStats(hash: Hash) {
 }
 
 function onClose() {
-  const { duplicatedHashes, latexLines, ntlmCsvRecords } = mapIndexedHashes(
+  const { duplicatedHashes, latexLines, ntlmCsvRecords } = buildStats(
     stats.indexedHashes
   );
 
@@ -142,7 +144,7 @@ function onClose() {
   writeFile(
     "latex_table.txt",
     HASHES_LATEX.replace("%REPLACE_ME%", latexLines.join("").trim()),
-    (err: Error) => err ?? console.error("Error Writing File", err)
+    (err: Error) => err && console.error("Error Writing File", err)
   );
 
   printData({
@@ -152,29 +154,22 @@ function onClose() {
   });
 }
 
-// Need Better Name
-type ReduceReturnType = {
-  latexLines: string[];
-  ntlmCsvRecords: string[][];
-  duplicatedHashes: DuplicatedHashes;
-};
-
-const mapIndexedHashes = (indexedHashes: IndexedHashes) =>
+// This seems to be a weigh up optimization or readability. Building multiple stats in 1 reduce is efficient. But not the nicest to read.
+const buildStats = (indexedHashes: IndexedHashes) =>
   Object.entries(indexedHashes)
-    .map(([key, value]) => ({ count: value.length, hash: key, users: value }))
-    .sort((a, b) => (a.count > b.count ? 1 : -1))
-    .reduce<ReduceReturnType>(
-      (acc, curr) => {
-        if (curr.count > 1) {
-          acc.duplicatedHashes[curr.hash] = curr;
+    .sort((a, b) => (a[1].length > b[1].length ? -1 : 1))
+    .reduce<BuiltStats>(
+      (acc, [hash, users]) => {
+        if (users.length > 1) {
+          acc.duplicatedHashes[hash] = { count: users.length, hash, users };
           acc.ntlmCsvRecords.push([
-            curr.count.toString(),
-            curr.hash,
-            curr.users.join(" - "),
+            users.length.toString(),
+            hash,
+            users.join(" - "),
           ]);
-          const masked =
-            curr.hash.slice(0, 4) + "*".repeat(14) + curr.hash.slice(28);
-          acc.latexLines.push(`\t\t ${masked} & ${curr.count} \\\\\n`);
+          acc.latexLines.push(
+            `\t\t ${maskHash(hash)} & ${users.length} \\\\\n`
+          );
         }
         return acc;
       },
@@ -187,7 +182,8 @@ const writeCSV = ({ records, columns, filename }: WriteCsvOpts) =>
     writeFile(
       filename,
       output,
-      (err: Error) => err ?? console.error("Error Writing File", err)
+      (err: Error) =>
+        err && console.error(`Error Writing File: ${filename}`, err)
     );
   });
 
@@ -197,11 +193,12 @@ const printData = (
   const red = chalk.bold.red;
   const green = chalk.bold.green;
   const yellow = chalk.bold.yellow;
+  const white = chalk.bold.white;
 
-  console.log("Total Hashes:\t\t", stats.hashes);
-  console.log("Enabled Accounts:\t", stats.enabledAccounts);
-  console.log("Disabled Accounts:\t", stats.disabledAccounts);
-  console.log("Computer Accounts:\t", stats.computerAccounts);
+  console.log(white("\nTotal Hashes:\t\t", stats.hashes));
+  console.log(white("Enabled Accounts:\t", stats.enabledAccounts));
+  console.log(white("Disabled Accounts:\t", stats.disabledAccounts));
+  console.log(white("Computer Accounts:\t", stats.computerAccounts));
 
   console.log(
     (stats.lmHashes.length > 0 ? red : green)(
@@ -231,7 +228,7 @@ const printData = (
     )
   );
 
-  console.log(`\nDomains:\t\t`, stats.domains);
+  console.log(white(`\nDomains:\t\t`, stats.domains));
   console.log(yellow("\nLatex Table output to latex_table.txt"));
-  console.log(yellow("CSV output to duplicated_hashes.txt"));
+  console.log(yellow("CSV output to duplicated_hashes.txt\n"));
 };

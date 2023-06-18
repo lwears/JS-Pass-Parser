@@ -36,3 +36,9 @@ export interface WriteCsvOpts {
 }
 
 export type DuplicatedHashes = Record<string, HashStat>;
+
+export type BuiltStats = {
+  latexLines: string[];
+  ntlmCsvRecords: string[][];
+  duplicatedHashes: DuplicatedHashes;
+};
